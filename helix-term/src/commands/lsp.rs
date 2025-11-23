@@ -88,11 +88,12 @@ struct SymbolInformationItem {
     symbol: lsp::SymbolInformation,
 }
 
-struct DiagnosticStyles {
-    hint: Style,
-    info: Style,
-    warning: Style,
-    error: Style,
+#[derive(Debug, Clone, Copy)]
+pub struct DiagnosticStyles {
+    pub hint: Style,
+    pub info: Style,
+    pub warning: Style,
+    pub error: Style,
 }
 
 struct PickerDiagnostic {

@@ -14,7 +14,7 @@ mod statusline;
 mod text;
 mod text_decorations;
 
-use crate::compositor::Compositor;
+use crate::compositor::{Component, Compositor, Context, EventResult};
 use crate::filter_picker_entry;
 use crate::job::{self, Callback};
 pub use completion::Completion;
@@ -410,6 +410,202 @@ fn get_child_if_single_dir(path: &Path) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiagnosticCounts {
+    errors: usize,
+    warnings: usize,
+    info: usize,
+    hints: usize,
+}
+
+impl DiagnosticCounts {
+    fn from_diagnostics(diagnostics: &[(helix_lsp::lsp::Diagnostic, helix_core::diagnostic::DiagnosticProvider)]) -> Self {
+        use helix_lsp::lsp::DiagnosticSeverity;
+        let mut counts = Self::default();
+        for (diag, _) in diagnostics {
+            match diag.severity {
+                Some(DiagnosticSeverity::ERROR) => counts.errors += 1,
+                Some(DiagnosticSeverity::WARNING) | None => counts.warnings += 1,
+                Some(DiagnosticSeverity::INFORMATION) => counts.info += 1,
+                Some(DiagnosticSeverity::HINT) => counts.hints += 1,
+                _ => {}
+            };
+        }
+        counts
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.errors += other.errors;
+        self.warnings += other.warnings;
+        self.info += other.info;
+        self.hints += other.hints;
+    }
+
+    fn to_spans(&self, styles: &crate::commands::lsp::DiagnosticStyles) -> Vec<tui::text::Span> {
+        use tui::text::Span;
+
+        [
+            (self.errors, "BUG", styles.error),
+            (self.warnings, "WARN", styles.warning),
+            (self.info, "INFO", styles.info),
+            (self.hints, "HINT", styles.hint),
+        ]
+        .iter()
+        .filter(|(count, _, _)| *count > 0)
+        .flat_map(|(count, label, style)| {
+            [Span::raw(" "), Span::styled(format!("{}:{}", label, count), *style)]
+        })
+        .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TreePickerData {
+    root: PathBuf,
+    styles: crate::commands::lsp::DiagnosticStyles,
+}
+
+type TreePicker = Picker<(PathBuf, DiagnosticCounts), TreePickerData>;
+
+/// Wrapper to customize Enter key behavior: navigate into directories or open files and close picker.
+/// Must implement render (required by Component trait) to delegate to inner picker.
+pub struct TreePickerComponent {
+    picker: TreePicker,
+}
+
+impl TreePickerComponent {
+    pub fn new(root: PathBuf, editor: &Editor) -> Self {
+        Self {
+            picker: create_tree_picker(root, editor),
+        }
+    }
+}
+
+impl Component for TreePickerComponent {
+    fn render(&mut self, area: helix_view::graphics::Rect, surface: &mut tui::buffer::Buffer, cx: &mut Context) {
+        self.picker.render(area, surface, cx);
+    }
+
+    fn handle_event(&mut self, event: &helix_view::input::Event, cx: &mut Context) -> EventResult {
+        use helix_view::input::{Event, KeyEvent};
+        use helix_view::keyboard::{KeyCode, KeyModifiers};
+
+        if matches!(event, Event::Key(KeyEvent { code: KeyCode::Enter, modifiers: KeyModifiers::NONE })) {
+            if let Some((path, _)) = self.picker.selection() {
+                if path.is_dir() {
+                    self.picker = create_tree_picker(helix_stdx::path::normalize(path), cx.editor);
+                    return EventResult::Consumed(None);
+                } else {
+                    if let Err(e) = cx.editor.open(path, helix_view::editor::Action::Replace) {
+                        cx.editor.set_error(e.to_string());
+                    }
+                    let callback: crate::compositor::Callback = Box::new(|compositor, _| {
+                        compositor.pop();
+                    });
+                    return EventResult::Consumed(Some(callback));
+                }
+            }
+        }
+        self.picker.handle_event(event, cx)
+    }
+}
+
+fn format_tree_path<'a>(
+    (path, counts): &'a (PathBuf, DiagnosticCounts),
+    data: &'a TreePickerData,
+) -> tui::widgets::Cell<'a> {
+    use tui::text::{Span, Spans};
+
+    let (display_name, depth) = if Some(path.as_path()) == data.root.parent() {
+        ("..".to_string(), 0)
+    } else {
+        let relative = path.strip_prefix(&data.root).unwrap_or(path);
+        let depth = relative.parent().map_or(0, |p| p.components().count());
+        let mut name = relative.to_string_lossy().into_owned();
+        if path.is_dir() {
+            name.push('/');
+        }
+        (name, depth)
+    };
+
+    let mut spans = vec![
+        Span::raw("  ".repeat(depth)),
+        Span::raw(display_name),
+    ];
+    spans.extend(counts.to_spans(&data.styles));
+    Spans::from(spans).into()
+}
+
+fn create_tree_picker(root: PathBuf, editor: &Editor) -> TreePicker {
+    use ignore::WalkBuilder;
+    use std::collections::HashMap;
+
+    let paths: Vec<PathBuf> = root
+        .parent()
+        .filter(|p| p.parent().is_some())
+        .map(|parent| parent.to_path_buf())
+        .into_iter()
+        .chain(
+            WalkBuilder::new(&root)
+                .hidden(true)
+                .max_depth(Some(3))
+                .sort_by_file_name(|a, b| a.cmp(b))
+                .build()
+                .filter_map(|e| Some(e.ok()?.path().to_path_buf()))
+                .filter(|p| p != &root),
+        )
+        .collect();
+
+    let diag_cache: HashMap<&PathBuf, DiagnosticCounts> = paths
+        .iter()
+        .filter(|p| p.is_file())
+        .filter_map(|path| {
+            helix_core::Uri::try_from(path.clone()).ok()
+                .and_then(|uri| editor.diagnostics.get(&uri))
+                .map(|d| (path, DiagnosticCounts::from_diagnostics(d)))
+        })
+        .collect();
+
+    let parent = root.parent();
+    let items: Vec<_> = paths
+        .iter()
+        .map(|path| {
+            let counts = if Some(path.as_path()) == parent {
+                DiagnosticCounts::default()
+            } else {
+                diag_cache.get(path).copied().unwrap_or_else(|| {
+                    // For directories, aggregate diagnostics from all descendants:
+                    // - child.starts_with(path) matches all descendants AND the directory itself
+                    // - child.as_path() != path filters out the directory itself
+                    paths.iter()
+                        .filter(|child| child.starts_with(path) && child.as_path() != path)
+                        .filter_map(|child| diag_cache.get(child).copied())
+                        .fold(DiagnosticCounts::default(), |mut acc, c| { acc.add(&c); acc })
+                })
+            };
+            (path.clone(), counts)
+        })
+        .collect();
+
+    let data = TreePickerData {
+        root: root.clone(),
+        styles: crate::commands::lsp::DiagnosticStyles {
+            hint: editor.theme.get("hint"),
+            info: editor.theme.get("info"),
+            warning: editor.theme.get("warning"),
+            error: editor.theme.get("error"),
+        },
+    };
+
+    Picker::new(
+        [PickerColumn::new("path", format_tree_path)],
+        0,
+        items,
+        data,
+        |_, _, _| {},
+    )
 }
 
 pub mod completers {
