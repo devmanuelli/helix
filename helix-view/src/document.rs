@@ -111,10 +111,8 @@ impl Serialize for Mode {
     }
 }
 
-/// Inline completion data for ghost text display and acceptance.
 #[derive(Debug, Clone)]
-pub struct InlineCompletion {
-    /// The annotation for displaying ghost text (position + display text).
+pub struct InlineCompletionItem {
     pub annotation: InlineAnnotation,
     /// The full text to insert when accepting.
     pub insert_text: String,
@@ -122,20 +120,66 @@ pub struct InlineCompletion {
     pub replace_range: Option<Range>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InlineCompletion {
+    items: Vec<InlineCompletionItem>,
+    current_index: usize,
+}
+
 impl InlineCompletion {
-    pub fn new(
+    pub fn new(items: Vec<InlineCompletionItem>) -> Option<Self> {
+        if items.is_empty() {
+            return None;
+        }
+        Some(Self {
+            items,
+            current_index: 0,
+        })
+    }
+
+    pub fn single(
         cursor: usize,
         insert_text: String,
         offset: usize,
         replace_range: Option<Range>,
-    ) -> Self {
-        let annotation =
-            InlineAnnotation::new(cursor, insert_text.get(offset..).unwrap_or_default());
-        Self {
-            annotation,
+    ) -> Option<Self> {
+        let display_text = insert_text.get(offset..)?;
+        if display_text.is_empty() {
+            return None;
+        }
+        let item = InlineCompletionItem {
+            annotation: InlineAnnotation::new(cursor, display_text),
             insert_text,
             replace_range,
-        }
+        };
+        Some(Self {
+            items: vec![item],
+            current_index: 0,
+        })
+    }
+
+    pub fn current(&self) -> &InlineCompletionItem {
+        &self.items[self.current_index]
+    }
+
+    pub fn next(&mut self) {
+        self.current_index = (self.current_index + 1) % self.items.len();
+    }
+
+    pub fn prev(&mut self) {
+        self.current_index = (self.current_index + self.items.len() - 1) % self.items.len();
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn display_index(&self) -> (usize, usize) {
+        (self.current_index + 1, self.items.len())
     }
 }
 
@@ -2551,6 +2595,57 @@ mod test {
             .to_string(),
             helix_core::NATIVE_LINE_ENDING.as_str()
         );
+    }
+
+    #[test]
+    fn test_inline_completion_new_empty() {
+        let completion = InlineCompletion::new(vec![]);
+        assert!(completion.is_none());
+    }
+
+    #[test]
+    fn test_inline_completion_cycling() {
+        use helix_core::text_annotations::InlineAnnotation;
+
+        let items = vec![
+            InlineCompletionItem {
+                annotation: InlineAnnotation::new(0, "first"),
+                insert_text: "first".to_string(),
+                replace_range: None,
+            },
+            InlineCompletionItem {
+                annotation: InlineAnnotation::new(0, "second"),
+                insert_text: "second".to_string(),
+                replace_range: None,
+            },
+            InlineCompletionItem {
+                annotation: InlineAnnotation::new(0, "third"),
+                insert_text: "third".to_string(),
+                replace_range: None,
+            },
+        ];
+
+        let mut completion = InlineCompletion::new(items).expect("should create completion");
+
+        assert_eq!(completion.len(), 3);
+        assert_eq!(completion.display_index(), (1, 3));
+        assert_eq!(completion.current().insert_text, "first");
+
+        completion.next();
+        assert_eq!(completion.display_index(), (2, 3));
+        assert_eq!(completion.current().insert_text, "second");
+
+        completion.next();
+        assert_eq!(completion.display_index(), (3, 3));
+        assert_eq!(completion.current().insert_text, "third");
+
+        completion.next();
+        assert_eq!(completion.display_index(), (1, 3));
+        assert_eq!(completion.current().insert_text, "first");
+
+        completion.prev();
+        assert_eq!(completion.display_index(), (3, 3));
+        assert_eq!(completion.current().insert_text, "third");
     }
 
     macro_rules! decode {

@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use helix_core::syntax::config::LanguageServerFeature;
+use helix_core::text_annotations::InlineAnnotation;
 use helix_event::{register_hook, send_blocking};
 use helix_lsp::{lsp, util::lsp_range_to_range};
 use helix_view::{
-    document::{InlineCompletion, Mode},
+    document::{InlineCompletion, InlineCompletionItem, Mode},
     events::DocumentDidChange,
     handlers::Handlers,
 };
@@ -66,9 +67,9 @@ impl helix_event::AsyncHook for InlineCompletionHandler {
                     lsp::InlineCompletionResponse::Array(v) => v,
                     lsp::InlineCompletionResponse::List(l) => l.items,
                 };
-                let Some(item) = items.into_iter().next() else {
+                if items.is_empty() {
                     return;
-                };
+                }
 
                 job::dispatch(move |editor, _| {
                     // User may have left insert mode while request was in flight
@@ -80,32 +81,41 @@ impl helix_event::AsyncHook for InlineCompletionHandler {
                     };
                     let text = doc.text();
 
-                    let replace_range = item
-                        .range
-                        .and_then(|r| lsp_range_to_range(text, r, offset_encoding));
+                    let completion_items: Vec<InlineCompletionItem> = items
+                        .into_iter()
+                        .filter_map(|item| {
+                            let replace_range = item
+                                .range
+                                .and_then(|r| lsp_range_to_range(text, r, offset_encoding));
 
-                    // Only use offset if typed text matches insert_text prefix
-                    let offset = replace_range.map_or(0, |r| {
-                        let typed_len = cursor.saturating_sub(r.from());
-                        let Some(typed_slice) = text.get_slice(r.from()..cursor) else {
-                            return 0;
-                        };
-                        let typed_text: String = typed_slice.into();
-                        let prefix = item.insert_text.get(..typed_len).unwrap_or_default();
-                        if typed_text == prefix {
-                            typed_len
-                        } else {
-                            0
-                        }
-                    });
+                            let offset = replace_range.map_or(0, |r| {
+                                let typed_len = cursor.saturating_sub(r.from());
+                                let Some(typed_slice) = text.get_slice(r.from()..cursor) else {
+                                    return 0;
+                                };
+                                let typed_text: String = typed_slice.into();
+                                let prefix = item.insert_text.get(..typed_len).unwrap_or_default();
+                                if typed_text == prefix {
+                                    typed_len
+                                } else {
+                                    0
+                                }
+                            });
 
-                    doc.inline_completion = item
-                        .insert_text
-                        .get(offset..)
-                        .is_some_and(|s| !s.is_empty())
-                        .then(|| {
-                            InlineCompletion::new(cursor, item.insert_text, offset, replace_range)
-                        });
+                            let display_text = item.insert_text.get(offset..)?;
+                            if display_text.is_empty() {
+                                return None;
+                            }
+
+                            Some(InlineCompletionItem {
+                                annotation: InlineAnnotation::new(cursor, display_text),
+                                insert_text: item.insert_text,
+                                replace_range,
+                            })
+                        })
+                        .collect();
+
+                    doc.inline_completion = InlineCompletion::new(completion_items);
                 })
                 .await;
             });

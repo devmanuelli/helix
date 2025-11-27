@@ -211,13 +211,29 @@ impl EditorView {
         // Render ghost text at cursor position
         if let Some(completion) = doc.inline_completion.as_ref() {
             if let Some(cursor_pos) = editor.cursor_cache.get(view, doc) {
-                let style = theme.get("ui.virtual.inline-completion");
+                let base_style = theme.get("ui.virtual.inline-completion");
+                let style = if base_style.fg.is_none() {
+                    base_style.fg(Color::Gray)
+                } else {
+                    base_style
+                }
+                .add_modifier(Modifier::ITALIC);
                 let x = inner.x + cursor_pos.col as u16;
                 let y = inner.y + cursor_pos.row as u16;
-                for (i, line) in completion.annotation.text.split('\n').enumerate() {
+                let current_item = completion.current();
+                let mut first_line_end_x = x;
+                for (i, line) in current_item.annotation.text.split('\n').enumerate() {
                     // First line starts at cursor, subsequent lines at viewport left edge
                     let line_x = if i == 0 { x } else { inner.x };
                     surface.set_string(line_x, y + i as u16, line, style);
+                    if i == 0 {
+                        first_line_end_x = line_x + line.chars().count() as u16;
+                    }
+                }
+                if completion.len() > 1 {
+                    let (current, total) = completion.display_index();
+                    let indicator = format!(" [{}/{}]", current, total);
+                    surface.set_string(first_line_end_x, y, &indicator, style);
                 }
             }
         }

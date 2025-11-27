@@ -518,6 +518,8 @@ impl MappableCommand {
         completion, "Invoke completion popup",
         inline_completion_accept, "Accept inline completion",
         inline_completion_dismiss, "Dismiss inline completion",
+        inline_completion_next, "Cycle to next inline completion",
+        inline_completion_prev, "Cycle to previous inline completion",
         hover, "Show docs for item under cursor",
         toggle_comments, "Comment/uncomment selections",
         toggle_line_comments, "Line comment/uncomment selections",
@@ -5267,25 +5269,49 @@ pub fn completion(cx: &mut Context) {
 pub fn inline_completion_accept(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     if let Some(c) = doc.inline_completion.take() {
+        let item = c.current();
         let text = doc.text();
-        let t = if let Some(r) = c.replace_range {
-            // Position cursor at end of inserted text
-            let cursor = r.from() + c.insert_text.chars().count();
+        let t = if let Some(r) = item.replace_range {
+            let cursor = r.from() + item.insert_text.chars().count();
             Transaction::change(
                 text,
-                std::iter::once((r.from(), r.to(), Some(c.insert_text.into()))),
+                std::iter::once((r.from(), r.to(), Some(item.insert_text.clone().into()))),
             )
             .with_selection(Selection::point(cursor))
         } else {
-            Transaction::insert(text, doc.selection(view.id), c.insert_text.into())
+            Transaction::insert(text, doc.selection(view.id), item.insert_text.clone().into())
         };
         doc.apply(&t, view.id);
+    } else {
+        insert_newline(cx);
     }
 }
 
 pub fn inline_completion_dismiss(cx: &mut Context) {
     if doc_mut!(cx.editor).inline_completion.take().is_none() {
         normal_mode(cx);
+    }
+}
+
+pub fn inline_completion_next(cx: &mut Context) {
+    let doc = doc_mut!(cx.editor);
+    if doc.inline_completion.is_some() {
+        if let Some(ref mut completion) = doc.inline_completion {
+            completion.next();
+        }
+    } else {
+        smart_tab(cx);
+    }
+}
+
+pub fn inline_completion_prev(cx: &mut Context) {
+    let doc = doc_mut!(cx.editor);
+    if doc.inline_completion.is_some() {
+        if let Some(ref mut completion) = doc.inline_completion {
+            completion.prev();
+        }
+    } else {
+        insert_tab(cx);
     }
 }
 
