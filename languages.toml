@@ -113,6 +113,7 @@ r = { command = "R", args = ["--no-echo", "-e", "languageserver::run()"] }
 racket = { command = "racket", args = ["-l", "racket-langserver"] }
 regols = { command = "regols" }
 rescript-language-server = { command = "rescript-language-server", args = ["--stdio"] }
+ripple-lsp = { command = "ripple-language-server", args = ["--stdio"] }
 robotframework_ls = { command = "robotframework_ls" }
 ron-lsp = { command = "ron-lsp" }
 ruff = { command = "ruff", args = ["server"] }
@@ -2062,7 +2063,7 @@ source = { git = "https://github.com/gbprod/tree-sitter-gitcommit", rev = "a7166
 [[language]]
 name = "git-notes"
 scope = "git.notesmsg"
-file-types = [{ glob = "NOTES_EDITMSG" }]
+file-types = [{ glob = "NOTES_EDITMSG" }, { glob = "EDIT_DESCRIPTION" }]
 comment-token = "#"
 indent = { tab-width = 4, unit = "    " }
 rulers = [73]
@@ -4779,7 +4780,7 @@ indent = { tab-width = 2, unit = "  " }
 
 [[grammar]]
 name = "alloy"
-source = { git = "https://github.com/mattsre/tree-sitter-alloy", rev = "3e18eb4e97f06c57a3925f3d20bef6329a6eaef3" }
+source = { git = "https://github.com/mattsre/tree-sitter-alloy", rev = "58d462b1cdb077682b130caa324f3822aeb00b8e" }
 
 [[language]]
 name = "luau"
@@ -5071,3 +5072,17 @@ comment-token = "#"
 [[grammar]]
 name = "scfg"
 source = { git = "https://github.com/rockorager/tree-sitter-scfg", rev = "d850fd470445d73de318a21d734d1e09e29b773c" }
+
+[[language]]
+name = "ripple"
+scope = "source.ripple"
+file-types = [ "ripple" ]
+roots = [ "package.json" ]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit="    "}
+language-servers = [ "ripple-lsp" ]
+
+[[grammar]]
+name = "ripple"
+source = { git = "https://github.com/Ripple-TS/ripple", rev = "49762f0a63de0d1845fcd2e6632639c095995336", subpath = "packages/tree-sitter" }
