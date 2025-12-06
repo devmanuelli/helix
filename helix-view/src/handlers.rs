@@ -2,12 +2,14 @@ use completion::{CompletionEvent, CompletionHandler};
 use helix_event::send_blocking;
 use tokio::sync::mpsc::Sender;
 
+use crate::handlers::inline_completion::InlineCompletionEvent;
 use crate::handlers::lsp::SignatureHelpInvoked;
 use crate::{DocumentId, Editor, ViewId};
 
 pub mod completion;
 pub mod dap;
 pub mod diagnostics;
+pub mod inline_completion;
 pub mod lsp;
 pub mod word_index;
 
@@ -26,8 +28,7 @@ pub struct Handlers {
     pub word_index: word_index::Handler,
     pub pull_diagnostics: Sender<lsp::PullDiagnosticsEvent>,
     pub pull_all_documents_diagnostics: Sender<lsp::PullAllDocumentsDiagnosticsEvent>,
-    /// Auto-trigger via channel; manual trigger bypasses debounce (see helix-term handler)
-    pub inline_completions: Sender<()>,
+    pub inline_completions: Sender<InlineCompletionEvent>,
 }
 
 impl Handlers {

@@ -5291,6 +5291,9 @@ pub fn inline_completion_accept(cx: &mut Context) {
     }
 }
 
+/// Dismiss inline completion if present, otherwise exit to normal mode.
+/// This allows a single keybind (e.g., Escape) to first dismiss the suggestion,
+/// then exit insert mode on subsequent press.
 pub fn inline_completion_dismiss(cx: &mut Context) {
     if doc_mut!(cx.editor)
         .inline_completions
@@ -5317,10 +5320,13 @@ pub fn inline_completion_prev(cx: &mut Context) {
         .rebuild_overlays(&mut doc.inline_completion_overlays);
 }
 
-pub fn inline_completion_trigger(_cx: &mut Context) {
+pub fn inline_completion_trigger(cx: &mut Context) {
+    use helix_event::send_blocking;
     use helix_lsp::lsp;
-    crate::handlers::inline_completion::trigger_inline_completion(
-        lsp::InlineCompletionTriggerKind::Invoked,
+    use helix_view::handlers::inline_completion::InlineCompletionEvent;
+    send_blocking(
+        &cx.editor.handlers.inline_completions,
+        InlineCompletionEvent::Trigger(lsp::InlineCompletionTriggerKind::Invoked),
     );
 }
 
